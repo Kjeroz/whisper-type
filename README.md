@@ -1,71 +1,143 @@
-# Multilingual Dictation App based on OpenAI Whisper
-Multilingual dictation app based on the powerful OpenAI Whisper ASR model(s) to provide accurate and efficient speech-to-text conversion in any application. The app runs in the background and is triggered through a keyboard shortcut. It is also entirely offline, so no data will be shared. It allows users to set up their own keyboard combinations and choose from different Whisper models, and languages.
+# Whisper Dictation
 
-## Prerequisites
-The PortAudio and llvm library is required for this app to work. You can install it on macOS using the following command:
+Offline voice dictation for Linux using OpenAI Whisper. Speak, and text appears at your cursor.
 
-```bash
-brew install portaudio llvm
-```
+- **Fully offline** - no API keys, no data leaves your machine
+- **System tray icon** - left-click for settings (model, language, device, timing)
+- **Keyboard shortcut** - Ctrl+Alt to toggle recording (configurable)
+- **Push-to-talk** - hold keys to record, release to transcribe
+- **Multilingual** - supports 99+ languages via Whisper
 
-## Permissions
-The app requires accessibility permissions to register global hotkeys and permission to access your microphone for speech recognition.
-
-## Installation
-Clone the repository:
+## Install
 
 ```bash
-git clone https://github.com/foges/whisper-dictation.git
+git clone https://github.com/USER/whisper-dictation.git
 cd whisper-dictation
+chmod +x install.sh
+./install.sh
 ```
 
-If you use poetry:
-
-```shell
-poetry install
-poetry shell
-```
-
-Or, if you don't use poetry, first create a virtual environment:
-
-```bash
-python3 -m venv venv
-source venv/bin/activate
-```
-
-Install the required packages:
-
-```bash
-pip install -r requirements.txt
-```
+The installer:
+1. Installs system dependencies (portaudio, GTK, AppIndicator)
+2. Creates a Python 3.12 venv with `--system-site-packages`
+3. Installs all Python packages
+4. Sets up autostart on login
 
 ## Usage
-Run the application:
 
 ```bash
-python whisper-dictation.py
+# Start the app
+./run.sh
+
+# Or directly
+./venv/bin/python whisper-dictation-linux.py
+
+# List audio devices
+./venv/bin/python whisper-dictation-linux.py --list-devices
 ```
 
-By default, the app uses the "base" Whisper ASR model and the key combination to toggle dictation is cmd+option on macOS and ctrl+alt on other platforms. You can change the model and the key combination using command-line arguments.  Note that models other than `tiny` and `base` can be slow to transcribe and are not recommended unless you're using a powerful computer, ideally one with a CUDA-enabled GPU. For example:
+### System Tray
 
+Left-click the tray icon to access:
+- **Start/Stop Recording**
+- **Settings** > Model, Language, Audio Device, Max Time, Push-to-Talk
+- **Quit**
+
+### Keyboard Shortcuts
+
+| Mode | Action |
+|------|--------|
+| **Toggle** (default) | Press Ctrl+Alt to start, press again to stop |
+| **Push-to-Talk** | Hold Ctrl+Alt to record, release to transcribe |
+
+Change shortcut: `-k alt+shift`
+
+### Command-Line Options
+
+```
+-m MODEL       Whisper model: tiny, base, small, medium, large (default: base)
+-d DEVICE      Audio device index (default: auto-detect)
+-l LANG        Language code: en, fr, es, de, etc. (default: auto-detect)
+-t SECONDS     Max recording time (default: 60)
+-k KEYS        Keyboard shortcut (default: ctrl+alt)
+--push-to-talk Hold keys to record instead of toggle
+--list-devices Show available microphones
+```
+
+### Models
+
+| Model | Size | Speed | Accuracy |
+|-------|------|-------|----------|
+| tiny | 39 MB | Fast | Basic |
+| base | 74 MB | Good | Good |
+| small | 244 MB | Medium | Better |
+| medium | 769 MB | Slow | Great |
+| large | 1550 MB | Very slow | Best |
+
+First run downloads the model (~74 MB for base).
+
+## Configuration
+
+Settings are saved to `~/.config/whisper-dictation/config.json`:
+
+```json
+{
+  "model": "base",
+  "device": 4,
+  "max_time": 60,
+  "language": "en",
+  "push_to_talk": false,
+  "key_combination": "ctrl+alt"
+}
+```
+
+Edit via tray icon > Settings > Edit Config File, or manually.
+
+## System Requirements
+
+- **OS**: Linux (Ubuntu/Debian, Fedora, Arch)
+- **Desktop**: X11 (Cinnamon, GNOME, KDE, XFCE)
+- **Python**: 3.11+
+- **RAM**: ~1 GB (base model), ~4 GB (medium)
+- **Microphone**: Any (USB, built-in, Bluetooth)
+
+### Required System Packages
 
 ```bash
-python whisper-dictation.py -m large -k cmd_r+shift -l en
+# Ubuntu/Debian
+sudo apt install python3.12 python3.12-venv python3.12-dev \
+    portaudio19-dev python3-gi gir1.2-ayatanaappindicator3-0.1
+
+# Fedora
+sudo dnf install python3 portaudio-devel python3-gobject \
+    libappindicator-gtk3
+
+# Arch
+sudo pacman -S portaudio python-gobject libappindicator-gtk3
 ```
 
-The models are multilingual, and you can specify a two-letter language code (e.g., "no" for Norwegian) with the `-l` or `--language` option. Specifying the language can improve recognition accuracy, especially for smaller model sizes.
+## Troubleshooting
 
-#### Replace macOS default dictation trigger key
-You can use this app to replace macOS built-in dictation. Trigger to begin recording with a double click of Right Command key and stop recording with a single click of Right Command key.
+**No tray icon**: Ensure you're on X11, not Wayland. Check `echo $XDG_SESSION_TYPE`.
+
+**"Invalid sample rate" error**: Your audio device may not support 16kHz. Try a different device with `--list-devices`.
+
+**Keyboard shortcut doesn't work**: Add your user to the `input` group:
 ```bash
-python whisper-dictation.py -m large --k_double_cmd -l en
+sudo usermod -a -G input $USER
+# Log out and back in
 ```
-To use this trigger, go to System Settings -> Keyboard, disable Dictation. If you double click Right Command key on any text field, macOS will ask whether you want to enable Dictation, so select Don't Ask Again.
 
-## Setting the App as a Startup Item
-To have the app run automatically when your computer starts, follow these steps:
+**ALSA warnings**: Harmless. Can be suppressed by setting `--list-devices` to find your device.
 
- 1. Open System Preferences.
- 2. Go to Users & Groups.
- 3. Click on your username, then select the Login Items tab.
- 4. Click the + button and add the `run.sh` script from the whisper-dictation folder.
+## Uninstall
+
+```bash
+rm -rf ~/whisper-dictation
+rm ~/.config/autostart/whisper-dictation.desktop
+rm -rf ~/.config/whisper-dictation
+```
+
+## License
+
+MIT License - see [LICENSE](LICENSE)
