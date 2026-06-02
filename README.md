@@ -62,9 +62,10 @@ Say a language name **by itself** (one word) to switch languages. Nothing is typ
 | "French" | Switches to French, no text output |
 | "Deutsch" | Switches to German, no text output |
 | "English" | Switches to English, no text output |
+| "Auto" | Switches to auto-detect (Whisper picks the language) |
 | "Spanish hola" | Types "Spanish hola" normally (not a command) |
 
-Supported: English, French, Spanish, German, Italian, Portuguese, Dutch, Russian, Chinese, Japanese, Korean, Arabic, Swedish, Norwegian, Danish, Finnish, Polish, Turkish, Hindi, Thai, Vietnamese (in English and native script).
+Supported languages: English, French, Spanish, German, Italian, Portuguese, Dutch, Russian, Chinese, Japanese, Korean, Arabic, Swedish, Norwegian, Danish, Finnish, Polish, Turkish, Hindi, Thai, Vietnamese (in English and native script). Plus **Auto-detect** mode (default) where Whisper identifies the language automatically.
 
 ### Command-Line Options
 

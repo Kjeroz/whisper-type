@@ -23,9 +23,12 @@ try:
 except ImportError:
     CONFIG_OK = False
 
-COMMON_LANGS = ['en', 'fr', 'es', 'de', 'it', 'pt', 'nl', 'ru', 'zh', 'ja', 'ko', 'ar', 'sv', 'no', 'da', 'fi', 'pl', 'tr', 'hi', 'th', 'vi']
+_AUTO = "__auto__"  # sentinel for auto-detect language
+
+COMMON_LANGS = [None, 'en', 'fr', 'es', 'de', 'it', 'pt', 'nl', 'ru', 'zh', 'ja', 'ko', 'ar', 'sv', 'no', 'da', 'fi', 'pl', 'tr', 'hi', 'th', 'vi']
 
 _LANG_NAMES = {
+    None: 'Auto-detect',
     'en': 'English', 'fr': 'French', 'es': 'Spanish', 'de': 'German',
     'it': 'Italian', 'pt': 'Portuguese', 'nl': 'Dutch', 'ru': 'Russian',
     'zh': 'Chinese', 'ja': 'Japanese', 'ko': 'Korean', 'ar': 'Arabic',
@@ -55,6 +58,9 @@ _VOICE_LANG_NAMES = {
     'hindi': 'hi',
     'thai': 'th', 'ไทย': 'th', 'thailändisch': 'th',
     'vietnamese': 'vi', 'tiếng việt': 'vi', 'vietnamesisch': 'vi',
+    'auto': _AUTO, 'automatic': _AUTO, 'detect': _AUTO, 'auto-detect': _AUTO,
+    'autodetect': _AUTO, 'automatisk': _AUTO, 'automatique': _AUTO, 'automatisch': _AUTO,
+    'automático': _AUTO, 'automatico': _AUTO, 'automaattinen': _AUTO,
 }
 
 # ── SpeechTranscriber ───────────────────────────────────
@@ -317,7 +323,7 @@ class TrayApp:
         # Language submenu
         lang_menu = Gtk.Menu()
         self.lang_radio_items = []
-        cur_lang = self.current_lang or 'en'
+        cur_lang = self.current_lang
         for l in COMMON_LANGS:
             item = Gtk.RadioMenuItem(label=_LANG_NAMES.get(l, l))
             item._lang = l
@@ -400,21 +406,21 @@ class TrayApp:
         if CONFIG_OK: update_config(device=d)
 
     def _set_lang(self, l):
-        self.current_lang = l
-        print(f"Language: {l}", flush=True)
-        if CONFIG_OK: update_config(language=l)
+        self.current_lang = None if l == _AUTO else l
+        print(f"Language: {self.current_lang or 'auto-detect'}", flush=True)
+        if CONFIG_OK: update_config(language=self.current_lang)
 
     def _switch_lang(self, l):
         """Called from voice command — updates config + radio buttons."""
-        self.current_lang = l
-        if CONFIG_OK: update_config(language=l)
+        self.current_lang = None if l == _AUTO else l
+        if CONFIG_OK: update_config(language=self.current_lang)
         def _update_ui():
             for item in self.lang_radio_items:
-                if item._lang == l:
+                if item._lang == self.current_lang:
                     item.set_active(True)
                     break
         GLib.idle_add(_update_ui)
-        print(f"Voice switch language: {l}", flush=True)
+        print(f"Voice switch language: {self.current_lang or 'auto-detect'}", flush=True)
 
     def _toggle_ptt(self):
         self.ptt = self.ptt_item.get_active()
@@ -581,7 +587,7 @@ if __name__ == '__main__':
     if device is not None: device = int(device)
     max_time = getattr(args, 'max_time', None) or config.get('max_time', 60)
     lang   = getattr(args, 'language', None)
-    if lang is None: lang = config.get('language') or 'en'
+    if lang is None: lang = config.get('language')
     ptt    = getattr(args, 'push_to_talk', None)
     if ptt is None: ptt = config.get('push_to_talk', False)
     ptt = bool(ptt)

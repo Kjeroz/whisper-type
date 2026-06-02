@@ -15,7 +15,7 @@ DEFAULT_CONFIG = {
     "model": "base",
     "device": None,  # Auto-detect if None
     "max_time": 60,
-    "language": "en",
+    "language": None,  # None = auto-detect language
     "push_to_talk": False,
     "key_combination": "ctrl+shift"
 }
