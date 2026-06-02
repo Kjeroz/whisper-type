@@ -15,9 +15,9 @@ DEFAULT_CONFIG = {
     "model": "base",
     "device": None,  # Auto-detect if None
     "max_time": 60,
-    "language": None,
+    "language": "en",
     "push_to_talk": False,
-    "key_combination": "ctrl+alt"
+    "key_combination": "ctrl+shift"
 }
 
 def load_config():

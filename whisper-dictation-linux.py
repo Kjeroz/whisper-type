@@ -1,5 +1,6 @@
 import os
-os.environ['ALSA_CARD'] = '1'
+import sys
+import difflib
 
 import gi
 gi.require_version('Gtk', '3.0')
@@ -22,21 +23,102 @@ try:
 except ImportError:
     CONFIG_OK = False
 
-COMMON_LANGS = ['en', 'fr', 'es', 'de', 'it', 'pt', 'nl', 'ru', 'zh', 'ja', 'ko', 'ar']
+COMMON_LANGS = ['en', 'fr', 'es', 'de', 'it', 'pt', 'nl', 'ru', 'zh', 'ja', 'ko', 'ar', 'sv', 'no', 'da', 'fi', 'pl', 'tr', 'hi', 'th', 'vi']
+
+_LANG_NAMES = {
+    'en': 'English', 'fr': 'French', 'es': 'Spanish', 'de': 'German',
+    'it': 'Italian', 'pt': 'Portuguese', 'nl': 'Dutch', 'ru': 'Russian',
+    'zh': 'Chinese', 'ja': 'Japanese', 'ko': 'Korean', 'ar': 'Arabic',
+    'sv': 'Swedish', 'no': 'Norwegian', 'da': 'Danish', 'fi': 'Finnish',
+    'pl': 'Polish', 'tr': 'Turkish', 'hi': 'Hindi', 'th': 'Thai', 'vi': 'Vietnamese',
+}
+
+_VOICE_LANG_NAMES = {
+    'french': 'fr', 'français': 'fr', 'francais': 'fr', 'francese': 'fr', 'französisch': 'fr',
+    'english': 'en', 'englisch': 'en', 'anglais': 'en', 'inglese': 'en',
+    'spanish': 'es', 'español': 'es', 'espanol': 'es', 'spanisch': 'es', 'espagnol': 'es', 'spagnolo': 'es',
+    'german': 'de', 'deutsch': 'de', 'allemand': 'de', 'allemande': 'de', 'tedesco': 'de',
+    'italian': 'it', 'italiano': 'it', 'italien': 'it', 'italienisch': 'it', 'italienske': 'it',
+    'portuguese': 'pt', 'português': 'pt', 'portugues': 'pt', 'portugiesisch': 'pt',
+    'dutch': 'nl', 'nederlands': 'nl', 'hollandais': 'nl', 'holländisch': 'nl',
+    'russian': 'ru', 'русский': 'ru', 'russe': 'ru', 'russisch': 'ru',
+    'chinese': 'zh', 'mandarin': 'zh', '中文': 'zh', 'chinois': 'zh', 'chinesisch': 'zh',
+    'japanese': 'ja', '日本語': 'ja', 'japonais': 'ja', 'japanisch': 'ja',
+    'korean': 'ko', '한국어': 'ko', 'coréen': 'ko', 'coreen': 'ko', 'koreanisch': 'ko',
+    'arabic': 'ar', 'العربية': 'ar', 'arabe': 'ar', 'arabisch': 'ar',
+    'swedish': 'sv', 'svenska': 'sv', 'suédois': 'sv', 'suedois': 'sv', 'schwedisch': 'sv',
+    'norwegian': 'no', 'norsk': 'no', 'norvégien': 'no', 'norwegisch': 'no',
+    'danish': 'da', 'dansk': 'da', 'danois': 'da', 'dänisch': 'da',
+    'finnish': 'fi', 'suomi': 'fi', 'finnois': 'fi', 'finnisch': 'fi',
+    'polish': 'pl', 'polski': 'pl', 'polonais': 'pl', 'polnisch': 'pl',
+    'turkish': 'tr', 'türkçe': 'tr', 'turc': 'tr', 'türkisch': 'tr',
+    'hindi': 'hi',
+    'thai': 'th', 'ไทย': 'th', 'thailändisch': 'th',
+    'vietnamese': 'vi', 'tiếng việt': 'vi', 'vietnamesisch': 'vi',
+}
 
 # ── SpeechTranscriber ───────────────────────────────────
+_HALLUCINATIONS = {
+    'thanks for watching', 'thank you for watching', 'thank you for watching!',
+    'thanks for watching!', 'subscribe', 'subscribe!', 'please subscribe',
+    'please subscribe!', 'thanks for watching. bye', 'see you next time',
+    'see you in the next video', 'bye', 'bye!', 'bye bye',
+    'you', 'the', 'a', 'i', 'oh', 'um', 'uh',
+}
+
 class SpeechTranscriber:
-    def __init__(self, model):
+    def __init__(self, model, on_language_switch=None):
         self.model = model
         self.kb = keyboard.Controller()
+        self.on_language_switch = on_language_switch
 
     def transcribe(self, audio_data, language=None):
+        # Check for language switch command BEFORE transcribing in current language.
+        # If audio is short, auto-detect and check if result is a language name.
+        if language and self.on_language_switch and len(audio_data) < 48000:
+            try:
+                result_detect = self.model.transcribe(audio_data)
+                text_detect = result_detect["text"].strip().lower().split()
+                if len(text_detect) == 1:
+                    w = text_detect[0].strip('!.,;:?!')
+                    if w in _VOICE_LANG_NAMES:
+                        self.on_language_switch(_VOICE_LANG_NAMES[w])
+                        return
+            except Exception:
+                pass
+
         result = self.model.transcribe(audio_data, language=language)
-        first = True
-        for ch in result["text"]:
-            if first and ch == " ":
-                first = False
-                continue
+
+        # Skip if mostly no speech
+        segments = result.get("segments", [])
+        if segments:
+            avg_nsp = sum(s.get("no_speech_prob", 0) for s in segments) / len(segments)
+            if avg_nsp > 0.5:
+                print(f"Skipped (no_speech_prob={avg_nsp:.2f})", flush=True)
+                return
+
+        text = result["text"].strip()
+        if not text:
+            return
+        if text.lower().strip('!.,;:?!') in _HALLUCINATIONS:
+            print(f"Skipped hallucination: {text}", flush=True)
+            return
+
+        # Voice language switch: single word "French" → switch language, type nothing
+        words = text.split()
+        if len(words) == 1:
+            w = words[0].lower().strip('!.,;:?!')
+            if w in _VOICE_LANG_NAMES and self.on_language_switch:
+                self.on_language_switch(_VOICE_LANG_NAMES[w])
+                return
+            # Fuzzy fallback: "Englisch" → English, "Anglais" → English
+            if self.on_language_switch and len(w) >= 3:
+                matches = difflib.get_close_matches(w, _VOICE_LANG_NAMES.keys(), n=1, cutoff=0.6)
+                if matches:
+                    self.on_language_switch(_VOICE_LANG_NAMES[matches[0]])
+                    return
+
+        for ch in text:
             try:
                 self.kb.type(ch)
                 time.sleep(0.0025)
@@ -73,6 +155,9 @@ class Recorder:
             frames.append(stream.read(FRAMES, exception_on_overflow=False))
         stream.stop_stream(); stream.close(); p.terminate()
         audio = np.frombuffer(b''.join(frames), dtype=np.int16).astype(np.float32) / 32768.0
+        if len(audio) < 8000:  # <0.5s at 16kHz
+            print("Skipped (too short)", flush=True)
+            return
         self.transcriber.transcribe(audio, language)
 
 # ── GlobalKeyListener ─────────────────────────────────────
@@ -81,7 +166,7 @@ class GlobalKeyListener:
         self.app = app
         parts = key_combo.split('+')
         self.k1 = parts[0]
-        self.k2 = parts[1]
+        self.k2 = parts[1] if len(parts) > 1 else None
         self.k1_down = False
         self.k2_down = False
         self.ptt = push_to_talk
@@ -95,8 +180,9 @@ class GlobalKeyListener:
 
     def on_press(self, key):
         if self._matches(key, self.k1): self.k1_down = True
-        if self._matches(key, self.k2): self.k2_down = True
-        if self.k1_down and self.k2_down:
+        if self.k2 and self._matches(key, self.k2): self.k2_down = True
+        combo = self.k1_down and (self.k2 is None or self.k2_down)
+        if combo:
             if self.ptt and not self.app.started:
                 GLib.idle_add(self.app.start_app)
             elif not self.ptt:
@@ -104,9 +190,12 @@ class GlobalKeyListener:
 
     def on_release(self, key):
         if self._matches(key, self.k1): self.k1_down = False
-        if self._matches(key, self.k2): self.k2_down = False
+        if self.k2 and self._matches(key, self.k2): self.k2_down = False
         if self.ptt and self.app.started:
-            if not self.k1_down or not self.k2_down:
+            if self.k2 is None:
+                if not self.k1_down:
+                    GLib.idle_add(self.app.stop_app)
+            elif not self.k1_down or not self.k2_down:
                 GLib.idle_add(self.app.stop_app)
 
 # ── GTK TrayApp ─────────────────────────────────────────
@@ -114,7 +203,10 @@ class TrayApp:
     def __init__(self, recorder, languages=None, max_time=60, ptt=False, models=None):
         self.recorder = recorder
         self.languages = languages
-        self.current_lang = (languages[0] if languages else None)
+        if isinstance(languages, str):
+            self.current_lang = languages
+        else:
+            self.current_lang = (languages[0] if languages else None)
         self.started = False
         self.max_time = max_time
         self.ptt = ptt
@@ -122,6 +214,7 @@ class TrayApp:
         self.current_model = 'base'
         self.timer = None
         self.keylistener = None
+        self.current_key = None
         self.config = None
         self.indicator = None
         self._build_indicator()
@@ -226,7 +319,7 @@ class TrayApp:
         self.lang_radio_items = []
         cur_lang = self.current_lang or 'en'
         for l in COMMON_LANGS:
-            item = Gtk.RadioMenuItem(label=l)
+            item = Gtk.RadioMenuItem(label=_LANG_NAMES.get(l, l))
             item._lang = l
             if self.lang_radio_items:
                 item.join_group(self.lang_radio_items[0])
@@ -244,6 +337,12 @@ class TrayApp:
         ptt_item.connect("toggled", lambda w: self._toggle_ptt())
         settings_menu.append(ptt_item)
         self.ptt_item = ptt_item
+
+        # Key Binding
+        self.current_key = None  # set after build
+        kb_item = Gtk.MenuItem(label="Key Binding")
+        kb_item.connect("activate", lambda _: self._set_keybinding())
+        settings_menu.append(kb_item)
 
         # Separator
         settings_menu.append(Gtk.SeparatorMenuItem())
@@ -305,6 +404,18 @@ class TrayApp:
         print(f"Language: {l}", flush=True)
         if CONFIG_OK: update_config(language=l)
 
+    def _switch_lang(self, l):
+        """Called from voice command — updates config + radio buttons."""
+        self.current_lang = l
+        if CONFIG_OK: update_config(language=l)
+        def _update_ui():
+            for item in self.lang_radio_items:
+                if item._lang == l:
+                    item.set_active(True)
+                    break
+        GLib.idle_add(_update_ui)
+        print(f"Voice switch language: {l}", flush=True)
+
     def _toggle_ptt(self):
         self.ptt = self.ptt_item.get_active()
         print(f"Push-to-talk: {self.ptt}", flush=True)
@@ -312,6 +423,51 @@ class TrayApp:
             self.keylistener.ptt = self.ptt
         if CONFIG_OK: update_config(push_to_talk=self.ptt)
         self._update_title()
+
+    def _set_keybinding(self):
+        dialog = Gtk.MessageDialog(
+            transient_for=None,
+            modal=True,
+            message_type=Gtk.MessageType.INFO,
+            buttons=Gtk.ButtonsType.NONE,
+            text="Press your desired key combination",
+        )
+        dialog.format_secondary_text("Hold two keys, then release. Press Escape to cancel.")
+        keys_held = []
+        captured = [False]
+
+        def on_press(key):
+            if captured[0]: return False
+            if key == keyboard.Key.esc:
+                GLib.idle_add(dialog.response, Gtk.ResponseType.CANCEL)
+                return False
+            if key not in keys_held:
+                keys_held.append(key)
+            names = [getattr(k, 'name', None) or getattr(k, 'char', None) or str(k) for k in keys_held]
+            GLib.idle_add(lambda n='+'.join(names): dialog.format_secondary_text(f"Keys: {n}\nRelease to confirm."))
+            return True
+
+        def on_release(key):
+            if captured[0]: return False
+            if len(keys_held) == 0: return True
+            names = [getattr(k, 'name', None) or getattr(k, 'char', None) or str(k) for k in keys_held]
+            combo_str = '+'.join(names)
+            captured[0] = True
+            GLib.idle_add(lambda c=combo_str: self._apply_keybinding(c, dialog))
+            return False
+
+        keyboard.Listener(on_press=on_press, on_release=on_release).start()
+        dialog.run()
+        dialog.destroy()
+
+    def _apply_keybinding(self, combo_str, dialog):
+        dialog.response(Gtk.ResponseType.OK)
+        self.current_key = combo_str
+        if CONFIG_OK: update_config(key_combination=combo_str)
+        self.keylistener = GlobalKeyListener(self, combo_str, push_to_talk=self.ptt)
+        keyboard.Listener(on_press=self.keylistener.on_press,
+                         on_release=self.keylistener.on_release).start()
+        print(f"Key binding: {combo_str}", flush=True)
 
     def _show_error(self, title, detail):
         dialog = Gtk.MessageDialog(
@@ -425,11 +581,11 @@ if __name__ == '__main__':
     if device is not None: device = int(device)
     max_time = getattr(args, 'max_time', None) or config.get('max_time', 60)
     lang   = getattr(args, 'language', None)
-    if lang is None: lang = (config.get('language','en').split(',') if config.get('language') else None)
+    if lang is None: lang = config.get('language') or 'en'
     ptt    = getattr(args, 'push_to_talk', None)
     if ptt is None: ptt = config.get('push_to_talk', False)
     ptt = bool(ptt)
-    key    = getattr(args, 'key', None) or config.get('key_combination', 'ctrl+alt')
+    key    = getattr(args, 'key', None) or config.get('key_combination', 'ctrl+shift')
 
     print(f"-> model={model} device={device} time={max_time}s lang={lang} ptt={ptt}", flush=True)
 
@@ -441,16 +597,20 @@ if __name__ == '__main__':
 
     app = TrayApp(recorder, lang, max_time, ptt,
                    models=['tiny','base','small','medium','large'])
+
+    # Wire voice language switching
+    transcriber.on_language_switch = app._switch_lang
     app.current_model = model
     if CONFIG_OK: app.config = config
 
     # Save effective config
     if CONFIG_OK:
         update_config(model=model, device=device, max_time=max_time,
-                       language=','.join(lang) if lang else None,
+                       language=lang if isinstance(lang, str) else (','.join(lang) if lang else None),
                        push_to_talk=ptt, key_combination=key)
 
     # Start key listener
+    app.current_key = key
     app.keylistener = GlobalKeyListener(app, key, push_to_talk=ptt)
     keyboard.Listener(on_press=app.keylistener.on_press,
                      on_release=app.keylistener.on_release).start()

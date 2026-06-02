@@ -4,4 +4,4 @@
 # Run with --help for all options
 
 cd "$(dirname "$0")"
-exec ./venv/bin/python whisper-dictation-linux.py "$@" 2>/dev/null
+exec ./venv/bin/python whisper-dictation-linux.py "$@"

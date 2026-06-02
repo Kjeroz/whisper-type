@@ -16,4 +16,4 @@ dependencies = [
 ]
 
 [project.scripts]
-whisper-dictation = "whisper-dictation-linux:main"
+whisper-dictation = "whisper_dictation_linux:main"

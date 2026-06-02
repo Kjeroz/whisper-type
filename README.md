@@ -4,8 +4,9 @@ Offline voice dictation for Linux using OpenAI Whisper. Speak, and text appears 
 
 - **Fully offline** - no API keys, no data leaves your machine
 - **System tray icon** - left-click for settings (model, language, device, timing)
-- **Keyboard shortcut** - Ctrl+Alt to toggle recording (configurable)
+- **Keyboard shortcut** - Ctrl+Shift to toggle recording (configurable)
 - **Push-to-talk** - hold keys to record, release to transcribe
+- **Voice language switch** - say a language name to switch (e.g. "French hello" → switches to French, types "hello")
 - **Multilingual** - supports 99+ languages via Whisper
 
 ## Install
@@ -40,17 +41,30 @@ The installer:
 
 Left-click the tray icon to access:
 - **Start/Stop Recording**
-- **Settings** > Model, Language, Audio Device, Max Time, Push-to-Talk
+- **Settings** > Model, Language, Audio Device, Max Time, Push-to-Talk, Key Binding
 - **Quit**
 
 ### Keyboard Shortcuts
 
 | Mode | Action |
 |------|--------|
-| **Toggle** (default) | Press Ctrl+Alt to start, press again to stop |
-| **Push-to-Talk** | Hold Ctrl+Alt to record, release to transcribe |
+| **Toggle** (default) | Press Ctrl+Shift to start, press again to stop |
+| **Push-to-Talk** | Hold Ctrl+Shift to record, release to transcribe |
 
-Change shortcut: `-k alt+shift`
+Change shortcut: `-k alt+shift` or via tray icon > Settings > Key Binding
+
+### Voice Commands
+
+Say a language name **by itself** (one word) to switch languages. Nothing is typed.
+
+| Say | Result |
+|-----|--------|
+| "French" | Switches to French, no text output |
+| "Deutsch" | Switches to German, no text output |
+| "English" | Switches to English, no text output |
+| "Spanish hola" | Types "Spanish hola" normally (not a command) |
+
+Supported: English, French, Spanish, German, Italian, Portuguese, Dutch, Russian, Chinese, Japanese, Korean, Arabic, Swedish, Norwegian, Danish, Finnish, Polish, Turkish, Hindi, Thai, Vietnamese (in English and native script).
 
 ### Command-Line Options
 
@@ -59,7 +73,7 @@ Change shortcut: `-k alt+shift`
 -d DEVICE      Audio device index (default: auto-detect)
 -l LANG        Language code: en, fr, es, de, etc. (default: auto-detect)
 -t SECONDS     Max recording time (default: 60)
--k KEYS        Keyboard shortcut (default: ctrl+alt)
+-k KEYS        Keyboard shortcut (default: ctrl+shift)
 --push-to-talk Hold keys to record instead of toggle
 --list-devices Show available microphones
 ```
@@ -87,7 +101,7 @@ Settings are saved to `~/.config/whisper-dictation/config.json`:
   "max_time": 60,
   "language": "en",
   "push_to_talk": false,
-  "key_combination": "ctrl+alt"
+  "key_combination": "ctrl+shift"
 }
 ```
 
