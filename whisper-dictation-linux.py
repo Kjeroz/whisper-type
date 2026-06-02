@@ -268,16 +268,26 @@ class TrayApp:
         return menu
 
     def _set_model(self, m):
+        prev = self.current_model
+        self.current_model = m
+        if CONFIG_OK: update_config(model=m)
         def _load():
             print(f"Loading model: {m}", flush=True)
             try:
                 new_model = load_model(m)
                 self.recorder.transcriber.model = new_model
-                self.current_model = m
-                if CONFIG_OK: update_config(model=m)
                 print(f"Model {m} loaded", flush=True)
             except Exception as e:
                 print(f"Model error: {e}", flush=True)
+                self.current_model = prev
+                if CONFIG_OK: update_config(model=prev)
+                def revert_and_show():
+                    for item in self.model_radio_items:
+                        if item._model == prev:
+                            item.set_active(True)
+                            break
+                    self._show_error(f"Failed to load '{m}' model.", self._model_error_hint(m, e))
+                GLib.idle_add(revert_and_show)
         threading.Thread(target=_load, daemon=True).start()
 
     def _set_time(self, t):
@@ -302,6 +312,36 @@ class TrayApp:
             self.keylistener.ptt = self.ptt
         if CONFIG_OK: update_config(push_to_talk=self.ptt)
         self._update_title()
+
+    def _show_error(self, title, detail):
+        dialog = Gtk.MessageDialog(
+            transient_for=None,
+            modal=True,
+            message_type=Gtk.MessageType.ERROR,
+            buttons=Gtk.ButtonsType.OK,
+            text=title,
+        )
+        dialog.format_secondary_text(detail)
+        dialog.run()
+        dialog.destroy()
+
+    _MODEL_HELP = {
+        "tiny":  "tiny:  ~1 GB VRAM /  ~1 GB RAM",
+        "base":  "base:  ~1 GB VRAM /  ~1 GB RAM",
+        "small": "small: ~2 GB VRAM /  ~2 GB RAM",
+        "medium": "medium: ~5 GB VRAM /  ~5 GB RAM",
+        "large": "large: ~10 GB VRAM / ~10 GB RAM",
+    }
+
+    def _model_error_hint(self, model, raw_error):
+        err = str(raw_error).lower()
+        hint_lines = []
+        if "out of memory" in err or "oom" in err:
+            hint_lines.append("Not enough GPU/CPU memory for this model.")
+        hint_lines.append(f"Requirements per device:\n"
+                          + "\n".join(self._MODEL_HELP.values()))
+        hint_lines.append(f"\nTry a smaller model from the tray icon Settings > Model.")
+        return "\n".join(hint_lines)
 
     def _edit_config(self):
         try:
