@@ -40,8 +40,8 @@ sudo pacman -S portaudio python-gobject libappindicator-gtk3 git
 ### Install
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/whisper-dictation.git
-cd whisper-dictation
+git clone https://github.com/Kjeroz/whisper-type.git
+cd whisper-type
 chmod +x install.sh
 ./install.sh
 ```
