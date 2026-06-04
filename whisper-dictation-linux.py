@@ -1,6 +1,6 @@
 import os
 import sys
-import difflib
+from pathlib import Path
 
 import gi
 gi.require_version('Gtk', '3.0')
@@ -13,6 +13,7 @@ import threading
 import pyaudio
 import numpy as np
 from pynput import keyboard
+import subprocess
 from whisper import load_model
 import sys
 
@@ -25,6 +26,46 @@ except ImportError:
 
 _AUTO = "__auto__"  # sentinel for auto-detect language
 
+# Constant title — kept the same in both states so the panel slot doesn't
+# resize and shift the icon position when toggling recording.
+_TRAY_TITLE = "Whisper Dictation"
+_IDLE_ICON = "audio-input-microphone"
+_REC_ICON_NAME = "media-record"  # fallback theme icon (used if cairo missing)
+
+
+def _ensure_recording_icon():
+    """Generate a 22x22 red-dot PNG in XDG_DATA_HOME on first run.
+
+    Returns the absolute path. The icon name never changes between states
+    (we keep `_IDLE_ICON` for idle, the file path for recording), so the
+    AppIndicator slot doesn't shift and we avoid "broken icon" lookups for
+    theme names that may not exist on every desktop.
+    """
+    icon_dir = Path(os.environ.get("XDG_DATA_HOME",
+                                   Path.home() / ".local" / "share")) \
+        / "whisper-dictation" / "icons"
+    icon_dir.mkdir(parents=True, exist_ok=True)
+    rec_path = icon_dir / "recording.png"
+    if rec_path.exists():
+        return str(rec_path)
+    try:
+        import cairo
+        size = 22
+        surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, size, size)
+        ctx = cairo.Context(surface)
+        ctx.set_source_rgba(0, 0, 0, 0)
+        ctx.paint()
+        ctx.set_source_rgba(0.85, 0.1, 0.1, 1.0)
+        ctx.arc(size / 2, size / 2, size / 2 - 2, 0, 2 * 3.14159)
+        ctx.fill()
+        ctx.set_source_rgba(1, 1, 1, 0.25)
+        ctx.arc(size / 2 - 2, size / 2 - 2, 2.5, 0, 2 * 3.14159)
+        ctx.fill()
+        surface.write_to_png(str(rec_path))
+        return str(rec_path)
+    except Exception:
+        return None  # caller falls back to _REC_ICON_NAME
+
 COMMON_LANGS = [None, 'en', 'fr', 'es', 'de', 'it', 'pt', 'nl', 'ru', 'zh', 'ja', 'ko', 'ar', 'sv', 'no', 'da', 'fi', 'pl', 'tr', 'hi', 'th', 'vi']
 
 _LANG_NAMES = {
@@ -36,31 +77,19 @@ _LANG_NAMES = {
     'pl': 'Polish', 'tr': 'Turkish', 'hi': 'Hindi', 'th': 'Thai', 'vi': 'Vietnamese',
 }
 
-_VOICE_LANG_NAMES = {
-    'french': 'fr', 'français': 'fr', 'francais': 'fr', 'francese': 'fr', 'französisch': 'fr',
-    'english': 'en', 'englisch': 'en', 'anglais': 'en', 'inglese': 'en',
-    'spanish': 'es', 'español': 'es', 'espanol': 'es', 'spanisch': 'es', 'espagnol': 'es', 'spagnolo': 'es',
-    'german': 'de', 'deutsch': 'de', 'allemand': 'de', 'allemande': 'de', 'tedesco': 'de',
-    'italian': 'it', 'italiano': 'it', 'italien': 'it', 'italienisch': 'it', 'italienske': 'it',
-    'portuguese': 'pt', 'português': 'pt', 'portugues': 'pt', 'portugiesisch': 'pt',
-    'dutch': 'nl', 'nederlands': 'nl', 'hollandais': 'nl', 'holländisch': 'nl',
-    'russian': 'ru', 'русский': 'ru', 'russe': 'ru', 'russisch': 'ru',
-    'chinese': 'zh', 'mandarin': 'zh', '中文': 'zh', 'chinois': 'zh', 'chinesisch': 'zh',
-    'japanese': 'ja', '日本語': 'ja', 'japonais': 'ja', 'japanisch': 'ja',
-    'korean': 'ko', '한국어': 'ko', 'coréen': 'ko', 'coreen': 'ko', 'koreanisch': 'ko',
-    'arabic': 'ar', 'العربية': 'ar', 'arabe': 'ar', 'arabisch': 'ar',
-    'swedish': 'sv', 'svenska': 'sv', 'suédois': 'sv', 'suedois': 'sv', 'schwedisch': 'sv',
-    'norwegian': 'no', 'norsk': 'no', 'norvégien': 'no', 'norwegisch': 'no',
-    'danish': 'da', 'dansk': 'da', 'danois': 'da', 'dänisch': 'da',
-    'finnish': 'fi', 'suomi': 'fi', 'finnois': 'fi', 'finnisch': 'fi',
-    'polish': 'pl', 'polski': 'pl', 'polonais': 'pl', 'polnisch': 'pl',
-    'turkish': 'tr', 'türkçe': 'tr', 'turc': 'tr', 'türkisch': 'tr',
-    'hindi': 'hi',
-    'thai': 'th', 'ไทย': 'th', 'thailändisch': 'th',
-    'vietnamese': 'vi', 'tiếng việt': 'vi', 'vietnamesisch': 'vi',
-    'auto': _AUTO, 'automatic': _AUTO, 'detect': _AUTO, 'auto-detect': _AUTO,
-    'autodetect': _AUTO, 'automatisk': _AUTO, 'automatique': _AUTO, 'automatisch': _AUTO,
-    'automático': _AUTO, 'automatico': _AUTO, 'automaattinen': _AUTO,
+# English-only single-word voice commands. Anything not in this dict triggers
+# an "unrecognized language" popup. The point of the constraint: a stray
+# "green" in a non-English-configured session used to come back as a Chinese
+# homophone, which then matched the previous multi-language dict and silently
+# switched the active language.
+_VOICE_LANG_ENGLISH = {
+    'english': 'en', 'french': 'fr', 'spanish': 'es', 'german': 'de',
+    'italian': 'it', 'portuguese': 'pt', 'dutch': 'nl', 'russian': 'ru',
+    'chinese': 'zh', 'japanese': 'ja', 'korean': 'ko', 'arabic': 'ar',
+    'swedish': 'sv', 'norwegian': 'no', 'danish': 'da', 'finnish': 'fi',
+    'polish': 'pl', 'turkish': 'tr', 'hindi': 'hi', 'thai': 'th',
+    'vietnamese': 'vi',
+    'auto': _AUTO, 'automatic': _AUTO, 'detect': _AUTO, 'autodetect': _AUTO,
 }
 
 # ── SpeechTranscriber ───────────────────────────────────
@@ -77,59 +106,90 @@ class SpeechTranscriber:
         self.model = model
         self.kb = keyboard.Controller()
         self.on_language_switch = on_language_switch
+        self.use_clipboard = True  # clipboard paste is more reliable than pynput typing
 
-    def transcribe(self, audio_data, language=None):
-        # Check for language switch command BEFORE transcribing in current language.
-        # If audio is short, auto-detect and check if result is a language name.
-        if language and self.on_language_switch and len(audio_data) < 48000:
-            try:
-                result_detect = self.model.transcribe(audio_data)
-                text_detect = result_detect["text"].strip().lower().split()
-                if len(text_detect) == 1:
-                    w = text_detect[0].strip('!.,;:?!')
-                    if w in _VOICE_LANG_NAMES:
-                        self.on_language_switch(_VOICE_LANG_NAMES[w])
-                        return
-            except Exception:
-                pass
+    def _paste_via_clipboard(self, text):
+        """Type text via xdotool (direct text injection, no Ctrl+V needed)"""
+        try:
+            subprocess.run(['xdotool', 'type', '--clearmodifiers', text],
+                           check=True)
+        except Exception as e:
+            print(f"xdotool type failed, falling back to typing: {e}", flush=True)
+            self._type_via_keyboard(text)
 
-        result = self.model.transcribe(audio_data, language=language)
-
-        # Skip if mostly no speech
-        segments = result.get("segments", [])
-        if segments:
-            avg_nsp = sum(s.get("no_speech_prob", 0) for s in segments) / len(segments)
-            if avg_nsp > 0.5:
-                print(f"Skipped (no_speech_prob={avg_nsp:.2f})", flush=True)
-                return
-
-        text = result["text"].strip()
-        if not text:
-            return
-        if text.lower().strip('!.,;:?!') in _HALLUCINATIONS:
-            print(f"Skipped hallucination: {text}", flush=True)
-            return
-
-        # Voice language switch: single word "French" → switch language, type nothing
-        words = text.split()
-        if len(words) == 1:
-            w = words[0].lower().strip('!.,;:?!')
-            if w in _VOICE_LANG_NAMES and self.on_language_switch:
-                self.on_language_switch(_VOICE_LANG_NAMES[w])
-                return
-            # Fuzzy fallback: "Englisch" → English, "Anglais" → English
-            if self.on_language_switch and len(w) >= 3:
-                matches = difflib.get_close_matches(w, _VOICE_LANG_NAMES.keys(), n=1, cutoff=0.6)
-                if matches:
-                    self.on_language_switch(_VOICE_LANG_NAMES[matches[0]])
-                    return
-
+    def _type_via_keyboard(self, text):
+        """Type text character by character via pynput (original method)"""
         for ch in text:
             try:
                 self.kb.type(ch)
                 time.sleep(0.0025)
             except:
                 pass
+
+    def transcribe(self, audio_data, language=None):
+        """Two-pass transcription.
+
+        Pass 1 — English: determines whether this is a single-word language
+        command, a single word to type directly, or a multi-word sentence.
+        Pass 2 — selected language: only for multi-word sentences, re-transcribes
+        using the user's chosen language so the output matches the target.
+        """
+        # ── Pass 1: always English ──────────────────────────────────
+        result1 = self.model.transcribe(audio_data, language='en')
+
+        segments = result1.get("segments", [])
+        if segments:
+            avg_nsp = sum(s.get("no_speech_prob", 0) for s in segments) / len(segments)
+            if avg_nsp > 0.5:
+                print(f"Skipped (no_speech_prob={avg_nsp:.2f})", flush=True)
+                return
+
+        text1 = result1["text"].strip()
+        if not text1:
+            return
+        if text1.lower().strip('!.,;:?!') in _HALLUCINATIONS:
+            print(f"Skipped hallucination: {text1}", flush=True)
+            return
+
+        words = text1.split()
+
+        # Single word → language command or type it
+        if len(words) == 1:
+            w = words[0].lower().strip('!.,;:?!')
+            if w in _VOICE_LANG_ENGLISH and self.on_language_switch:
+                print(f"Voice switch: {w} → {_VOICE_LANG_ENGLISH[w]}", flush=True)
+                self.on_language_switch(_VOICE_LANG_ENGLISH[w])
+                return
+            # Not a language name → type the single word
+            if self.use_clipboard:
+                self._paste_via_clipboard(text1)
+            else:
+                self._type_via_keyboard(text1)
+            return
+
+        # ── Pass 2: selected language ───────────────────────────────
+        # Multi-word: re-transcribe in the user's chosen language.
+        # `language` is the config value (e.g. 'fr', 'de', None for auto-detect).
+        result2 = self.model.transcribe(audio_data, language=language)
+
+        segments2 = result2.get("segments", [])
+        if segments2:
+            avg_nsp2 = sum(s.get("no_speech_prob", 0) for s in segments2) / len(segments2)
+            if avg_nsp2 > 0.5:
+                print(f"Skipped pass-2 (no_speech_prob={avg_nsp2:.2f})", flush=True)
+                return
+
+        text2 = result2["text"].strip()
+        if not text2:
+            return
+        if text2.lower().strip('!.,;:?!') in _HALLUCINATIONS:
+            print(f"Skipped hallucination (pass-2): {text2}", flush=True)
+            return
+
+        if self.use_clipboard:
+            self._paste_via_clipboard(text2)
+        else:
+            self._type_via_keyboard(text2)
 
 # ── Recorder ───────────────────────────────────────────
 class Recorder:
@@ -228,19 +288,24 @@ class TrayApp:
     def _build_indicator(self):
         self.indicator = AyatanaAppIndicator3.Indicator.new(
             "whisper-dictation",
-            "audio-input-microphone",
+            _IDLE_ICON,
             AyatanaAppIndicator3.IndicatorCategory.APPLICATION_STATUS
         )
         self.indicator.set_status(AyatanaAppIndicator3.IndicatorStatus.ACTIVE)
-        self._update_title()
+        # Resolve the recording icon once; fall back to a theme name if cairo
+        # failed. Either way, the icon *name* will change (icon name string
+        # versus file path), but the title text stays constant so the panel
+        # slot doesn't resize.
+        self._recording_icon = _ensure_recording_icon() or _REC_ICON_NAME
+        self.indicator.set_title(_TRAY_TITLE)
+        self._update_icon()
         self.indicator.set_menu(self._build_menu())
 
-    def _update_title(self):
-        mode = "[PTT]" if self.ptt else "[Toggle]"
-        title = "Recording..." if self.started else f"Whisper Dictation {mode}"
-        self.indicator.set_title(title)
-        icon_name = "audio-input-microphone" if not self.started else "audio-record-playing"
-        self.indicator.set_icon_full(icon_name, title)
+    def _update_icon(self):
+        if self.started:
+            self.indicator.set_icon_full(self._recording_icon, "Recording — click to stop")
+        else:
+            self.indicator.set_icon_full(_IDLE_ICON, "Idle — click for menu")
 
     def _build_menu(self):
         menu = Gtk.Menu()
@@ -428,7 +493,7 @@ class TrayApp:
         if self.keylistener:
             self.keylistener.ptt = self.ptt
         if CONFIG_OK: update_config(push_to_talk=self.ptt)
-        self._update_title()
+        self._update_icon()
 
     def _set_keybinding(self):
         dialog = Gtk.MessageDialog(
@@ -520,7 +585,7 @@ class TrayApp:
         self.recorder.start(self.current_lang)
         self.item_start.set_sensitive(False)
         self.item_stop.set_sensitive(True)
-        self._update_title()
+        self._update_icon()
         self._start_timer()
 
     def stop_app(self):
@@ -532,7 +597,7 @@ class TrayApp:
         print('Done.\n', flush=True)
         self.item_start.set_sensitive(True)
         self.item_stop.set_sensitive(False)
-        self._update_title()
+        self._update_icon()
 
     def _start_timer(self):
         self.start_time = time.time()
@@ -599,6 +664,8 @@ if __name__ == '__main__':
     print(f"{model} loaded", flush=True)
 
     transcriber = SpeechTranscriber(model_obj)
+    if CONFIG_OK:
+        transcriber.use_clipboard = config.get("use_clipboard", True)
     recorder = Recorder(transcriber, device_index=device)
 
     app = TrayApp(recorder, lang, max_time, ptt,

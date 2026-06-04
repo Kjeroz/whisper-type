@@ -15,9 +15,10 @@ DEFAULT_CONFIG = {
     "model": "base",
     "device": None,  # Auto-detect if None
     "max_time": 60,
-    "language": None,  # None = auto-detect language
+    "language": "en",  # Default to English (auto-detect available in tray menu)
     "push_to_talk": False,
-    "key_combination": "ctrl+shift"
+    "key_combination": "ctrl+shift",
+    "use_clipboard": True  # True = clipboard+Ctrl+V, False = pynput typing
 }
 
 def load_config():
