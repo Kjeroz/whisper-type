@@ -107,7 +107,7 @@ class SpeechTranscriber:
         self.on_language_switch = on_language_switch
         self.use_clipboard = True  # clipboard paste is more reliable than pynput typing
 
-    def _paste_via_clipboard(self, text):
+    def _type_via_xdotool(self, text):
         """Type text via xdotool (direct text injection, no Ctrl+V needed)"""
         try:
             subprocess.run(['xdotool', 'type', '--clearmodifiers', text],
@@ -126,9 +126,9 @@ class SpeechTranscriber:
                 pass
 
     def _emit(self, text):
-        """Route text to active paste method."""
+        """Route text to active input method."""
         if self.use_clipboard:
-            self._paste_via_clipboard(text)
+            self._type_via_xdotool(text)
         else:
             self._type_via_keyboard(text)
 
@@ -188,6 +188,7 @@ class Recorder:
         self.recording = False
         self.transcriber = transcriber
         self.device_index = device_index
+        self._pa = pyaudio.PyAudio()
 
     def start(self, language=None):
         threading.Thread(target=self._record_impl, args=(language,), daemon=True).start()
@@ -198,15 +199,14 @@ class Recorder:
     def _record_impl(self, language):
         self.recording = True
         FRAMES = 1024
-        p = pyaudio.PyAudio()
         try:
             try:
-                stream = p.open(format=pyaudio.paInt16, channels=1, rate=16000,
+                stream = self._pa.open(format=pyaudio.paInt16, channels=1, rate=16000,
                                 frames_per_buffer=FRAMES, input=True,
                                 input_device_index=self.device_index)
             except Exception as e:
                 print(f"Audio device error: {e}")
-                stream = p.open(format=pyaudio.paInt16, channels=1, rate=16000,
+                stream = self._pa.open(format=pyaudio.paInt16, channels=1, rate=16000,
                                 frames_per_buffer=FRAMES, input=True)
             frames = []
             try:
@@ -215,8 +215,9 @@ class Recorder:
             finally:
                 stream.stop_stream()
                 stream.close()
-        finally:
-            p.terminate()
+        except Exception as e:
+            print(f"Recording error: {e}", flush=True)
+            return
         audio = np.frombuffer(b''.join(frames), dtype=np.int16).astype(np.float32) / 32768.0
         if len(audio) < 8000:  # <0.5s at 16kHz
             print("Skipped (too short)", flush=True)
@@ -230,8 +231,8 @@ class GlobalKeyListener:
         parts = key_combo.split('+')
         self.k1 = parts[0]
         self.k2 = parts[1] if len(parts) > 1 else None
-        self.k1_down = False
-        self.k2_down = False
+        self.k1_down = threading.Event()
+        self.k2_down = threading.Event()
         self.ptt = push_to_talk
 
     def _matches(self, key, target):
@@ -242,9 +243,9 @@ class GlobalKeyListener:
         return False
 
     def on_press(self, key):
-        if self._matches(key, self.k1): self.k1_down = True
-        if self.k2 and self._matches(key, self.k2): self.k2_down = True
-        combo = self.k1_down and (self.k2 is None or self.k2_down)
+        if self._matches(key, self.k1): self.k1_down.set()
+        if self.k2 and self._matches(key, self.k2): self.k2_down.set()
+        combo = self.k1_down.is_set() and (self.k2 is None or self.k2_down.is_set())
         if combo:
             if self.ptt and not self.app.started:
                 GLib.idle_add(self.app.start_app)
@@ -252,20 +253,19 @@ class GlobalKeyListener:
                 GLib.idle_add(self.app.toggle)
 
     def on_release(self, key):
-        if self._matches(key, self.k1): self.k1_down = False
-        if self.k2 and self._matches(key, self.k2): self.k2_down = False
+        if self._matches(key, self.k1): self.k1_down.clear()
+        if self.k2 and self._matches(key, self.k2): self.k2_down.clear()
         if self.ptt and self.app.started:
             if self.k2 is None:
-                if not self.k1_down:
+                if not self.k1_down.is_set():
                     GLib.idle_add(self.app.stop_app)
-            elif not self.k1_down or not self.k2_down:
+            elif not self.k1_down.is_set() or not self.k2_down.is_set():
                 GLib.idle_add(self.app.stop_app)
 
 # ── GTK TrayApp ─────────────────────────────────────────
 class TrayApp:
     def __init__(self, recorder, languages=None, max_time=60, ptt=False, models=None):
         self.recorder = recorder
-        self.languages = languages
         if isinstance(languages, str):
             self.current_lang = languages
         else:
@@ -277,6 +277,7 @@ class TrayApp:
         self.current_model = 'base'
         self.timer = None
         self.keylistener = None
+        self._pynput_listener = None
         self.current_key = None
         self.config = None
         self.indicator = None
@@ -533,9 +534,12 @@ class TrayApp:
         dialog.response(Gtk.ResponseType.OK)
         self.current_key = combo_str
         if CONFIG_OK: update_config(key_combination=combo_str)
+        if self._pynput_listener:
+            self._pynput_listener.stop()
         self.keylistener = GlobalKeyListener(self, combo_str, push_to_talk=self.ptt)
-        keyboard.Listener(on_press=self.keylistener.on_press,
-                         on_release=self.keylistener.on_release).start()
+        self._pynput_listener = keyboard.Listener(on_press=self.keylistener.on_press,
+                         on_release=self.keylistener.on_release)
+        self._pynput_listener.start()
         print(f"Key binding: {combo_str}", flush=True)
 
     def _show_error(self, title, detail):
@@ -608,7 +612,7 @@ class TrayApp:
 
     def quit_app(self):
         if self.started: self.stop_app()
-        os._exit(0)
+        Gtk.main_quit()
 
 # ── CLI ──────────────────────────────────────────────────
 def parse_args():
@@ -682,8 +686,9 @@ if __name__ == '__main__':
     # Start key listener
     app.current_key = key
     app.keylistener = GlobalKeyListener(app, key, push_to_talk=ptt)
-    keyboard.Listener(on_press=app.keylistener.on_press,
-                     on_release=app.keylistener.on_release).start()
+    app._pynput_listener = keyboard.Listener(on_press=app.keylistener.on_press,
+                     on_release=app.keylistener.on_release)
+    app._pynput_listener.start()
 
     print(f"Running. Shortcut: {key} ({'push-to-talk' if ptt else 'toggle'})", flush=True)
     print("Left-click tray icon -> Settings for language/model/device", flush=True)

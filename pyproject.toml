@@ -10,10 +10,5 @@ dependencies = [
     "pyaudio",
     "pynput",
     "numpy",
-    "pystray",
-    "Pillow",
     "PyGObject",
 ]
-
-[project.scripts]
-whisper-dictation = "whisper_dictation_linux:main"
