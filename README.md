@@ -1,13 +1,13 @@
-# Whisper Dictation
+# Whisper Type
 
 Offline voice dictation for Linux. Speak, and text appears at your cursor.
 
 - **Fully offline** — no API keys, no data leaves your machine
-- **System tray icon** — left-click for all settings
-- **Keyboard shortcut** — Ctrl+Shift to record (configurable)
+- **System tray icon** — red dot when recording, microphone when idle
+- **Two-pass transcription** — English first for commands, then your selected language for sentences
+- **Keyboard shortcut** — configurable hotkey to start/stop recording
 - **Push-to-talk** — hold keys to record, release to transcribe
-- **Voice language switch** — say a language name to switch
-- **Auto-detect** — Whisper identifies the language automatically
+- **Voice language switch** — say a language name in English to switch
 - **99+ languages** via OpenAI Whisper
 
 ## Quick Start
@@ -17,24 +17,26 @@ Offline voice dictation for Linux. Speak, and text appears at your cursor.
 - **Linux** with X11 desktop (Cinnamon, GNOME, KDE, XFCE)
 - **Python 3.11+**
 - **Microphone** (USB, built-in, or Bluetooth)
+- **xdotool** (for text input)
 
 #### Install system dependencies
 
 **Ubuntu / Debian:**
 ```bash
 sudo apt install python3 python3-venv python3-dev \
-    portaudio19-dev python3-gi gir1.2-ayatanaappindicator3-0.1 git
+    portaudio19-dev python3-gi gir1.2-ayatanaappindicator3-0.1 \
+    xdotool git
 ```
 
 **Fedora:**
 ```bash
 sudo dnf install python3 portaudio-devel python3-gobject \
-    libappindicator-gtk3 git
+    libappindicator-gtk3 xdotool git
 ```
 
 **Arch:**
 ```bash
-sudo pacman -S portaudio python-gobject libappindicator-gtk3 git
+sudo pacman -S portaudio python-gobject libappindicator-gtk3 xdotool git
 ```
 
 ### Install
@@ -68,12 +70,9 @@ The first run downloads the Whisper model (~74 MB for base). Subsequent starts a
 
 ### Recording
 
-| Action | Shortcut |
-|--------|----------|
-| Start recording | Press **Ctrl+Shift** |
-| Stop recording | Press **Ctrl+Shift** again |
+Hold your configured hotkey (default: **Ctrl+Shift**) to record, release to transcribe. This is push-to-talk mode.
 
-Or use **Push-to-Talk**: hold **Ctrl+Shift** to record, release to transcribe.
+Or use toggle mode: press the hotkey once to start, once to stop.
 
 Toggle between modes: tray icon > Settings > Push-to-Talk.
 
@@ -84,7 +83,7 @@ Left-click the microphone icon:
 - **Start / Stop Recording**
 - **Settings**
   - **Model** — tiny, base, small, medium, large
-  - **Language** — Auto-detect (default), English, French, Swedish, etc.
+  - **Language** — English (default), French, Swedish, Auto-detect, etc.
   - **Audio Device** — pick your microphone
   - **Max Time** — 10s, 30s, 60s, 120s recording limit
   - **Push-to-Talk** — toggle hold-to-record mode
@@ -92,20 +91,33 @@ Left-click the microphone icon:
   - **Edit Config File** — open config in text editor
 - **Quit**
 
-### Voice Commands
+### How Transcription Works
 
-Say a language name **by itself** (one word) to switch languages. Nothing is typed.
+Whisper Type uses a **two-pass system**:
+
+1. **Pass 1 (English)** — always runs first. Detects word count and checks for language commands.
+2. **Pass 2 (selected language)** — only runs for multi-word sentences. Re-transcribes in your chosen language.
+
+| What you say | Pass 1 result | What happens |
+|-------------|---------------|--------------|
+| "french" | 1 word, matches language | Switches to French, nothing typed |
+| "hello" | 1 word, not a language | Types "hello" |
+| "comment allez-vous" | Multi-word | Pass 2 in French, types transcription |
+| "auto" | 1 word, matches language | Switches to auto-detect mode |
+
+### Voice Language Commands
+
+Say a language name **in English, by itself** to switch. The first pass always listens in English, so only English names work.
 
 | Say | What happens |
 |-----|-------------|
 | "French" | Switches to French |
-| "Deutsch" | Switches to German |
-| "Svenska" | Switches to Swedish |
+| "German" | Switches to German |
+| "Swedish" | Switches to Swedish |
 | "English" | Switches to English |
 | "Auto" | Switches to auto-detect mode |
-| "French bonjour" | Types "French bonjour" normally (not a command) |
 
-Works across languages: say "Anglais" while German is selected and it switches to English. Fuzzy matching handles pronunciation variations (e.g. "Englisch" → English).
+Works only for English names — "Francais", "Deutsch", "Svenska" are **not** recognized. Use the English word.
 
 ### Choosing a Model
 
@@ -128,7 +140,7 @@ Start with **base**. Upgrade to **small** if you need better accuracy. The model
 ```
 -m MODEL       tiny, base, small, medium, large (default: base)
 -d DEVICE      Audio device index (default: auto-detect)
--l LANG        Language code: en, fr, es, de, etc. (default: auto-detect)
+-l LANG        Language code: en, fr, es, de, etc. (default: en)
 -t SECONDS     Max recording time (default: 60)
 -k KEYS        Keyboard shortcut (default: ctrl+shift)
 --push-to-talk Hold keys to record instead of toggle
@@ -155,18 +167,24 @@ Settings are saved to `~/.config/whisper-dictation/config.json`:
   "model": "base",
   "device": 4,
   "max_time": 60,
-  "language": null,
-  "push_to_talk": false,
+  "language": "en",
+  "push_to_talk": true,
   "key_combination": "ctrl+shift"
 }
 ```
 
-- `language: null` means auto-detect (Whisper picks the language)
-- Edit via tray icon > Settings > Edit Config File, or manually
+- `language: "en"` is the default (English). Set to `null` for auto-detect.
+- Edit via tray icon > Settings > Edit Config File, or manually.
+
+### Recording Icon
+
+When recording, the tray icon changes to a **red dot** and shows "Recording" in the tooltip. The icon stays in the same position in the panel (no shifting).
+
+A red dot PNG is generated automatically on first run at `~/.local/share/whisper-dictation/icons/recording.png`.
 
 ## Autostart
 
-The installer sets up autostart so Whisper Dictation launches on login. The autostart entry is at:
+The installer sets up autostart so Whisper Type launches on login. The autostart entry is at:
 
 ```
 ~/.config/autostart/whisper-dictation.desktop
@@ -195,8 +213,16 @@ sudo usermod -a -G input $USER
 **ALSA warnings in terminal:**
 - Harmless. They appear because of multiple audio devices. The app still works.
 
+**Text doesn't appear after recording:**
+- Make sure `xdotool` is installed: `which xdotool`
+- Install if missing: `sudo apt install xdotool` (Ubuntu/Debian)
+
 **Transcription is gibberish:**
 - You probably spoke in a different language than what was selected. Say "auto" to switch to auto-detect mode, or say the correct language name.
+
+**Voice language switch not working:**
+- Language names must be spoken **in English** ("French", not "Francais")
+- Must be a single word by itself ("French" yes, "French please" no)
 
 ## Uninstall
 
@@ -204,6 +230,7 @@ sudo usermod -a -G input $USER
 rm -rf ~/whisper-dictation
 rm ~/.config/autostart/whisper-dictation.desktop
 rm -rf ~/.config/whisper-dictation
+rm -rf ~/.local/share/whisper-dictation
 ```
 
 ## License
