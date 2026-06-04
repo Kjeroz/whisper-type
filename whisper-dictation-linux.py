@@ -5,7 +5,7 @@ from pathlib import Path
 import gi
 gi.require_version('Gtk', '3.0')
 gi.require_version('AyatanaAppIndicator3', '0.1')
-from gi.repository import Gtk, AyatanaAppIndicator3, GLib, GdkPixbuf
+from gi.repository import Gtk, AyatanaAppIndicator3, GLib
 
 import argparse
 import time
@@ -15,7 +15,6 @@ import numpy as np
 from pynput import keyboard
 import subprocess
 from whisper import load_model
-import sys
 
 # ── Config ──────────────────────────────────────────────
 try:
@@ -118,13 +117,36 @@ class SpeechTranscriber:
             self._type_via_keyboard(text)
 
     def _type_via_keyboard(self, text):
-        """Type text character by character via pynput (original method)"""
+        """Fallback: type character by character via pynput"""
         for ch in text:
             try:
                 self.kb.type(ch)
                 time.sleep(0.0025)
-            except:
+            except Exception:
                 pass
+
+    def _emit(self, text):
+        """Route text to active paste method."""
+        if self.use_clipboard:
+            self._paste_via_clipboard(text)
+        else:
+            self._type_via_keyboard(text)
+
+    def _validate(self, result):
+        """Common post-transcription checks. Returns clean text or None to skip."""
+        segments = result.get("segments", [])
+        if segments:
+            avg_nsp = sum(s.get("no_speech_prob", 0) for s in segments) / len(segments)
+            if avg_nsp > 0.5:
+                print(f"Skipped (no_speech_prob={avg_nsp:.2f})", flush=True)
+                return None
+        text = result["text"].strip()
+        if not text:
+            return None
+        if text.lower().strip('!.,;:?!') in _HALLUCINATIONS:
+            print(f"Skipped hallucination: {text}", flush=True)
+            return None
+        return text
 
     def transcribe(self, audio_data, language=None):
         """Two-pass transcription.
@@ -135,20 +157,8 @@ class SpeechTranscriber:
         using the user's chosen language so the output matches the target.
         """
         # ── Pass 1: always English ──────────────────────────────────
-        result1 = self.model.transcribe(audio_data, language='en')
-
-        segments = result1.get("segments", [])
-        if segments:
-            avg_nsp = sum(s.get("no_speech_prob", 0) for s in segments) / len(segments)
-            if avg_nsp > 0.5:
-                print(f"Skipped (no_speech_prob={avg_nsp:.2f})", flush=True)
-                return
-
-        text1 = result1["text"].strip()
-        if not text1:
-            return
-        if text1.lower().strip('!.,;:?!') in _HALLUCINATIONS:
-            print(f"Skipped hallucination: {text1}", flush=True)
+        text1 = self._validate(self.model.transcribe(audio_data, language='en'))
+        if text1 is None:
             return
 
         words = text1.split()
@@ -161,35 +171,16 @@ class SpeechTranscriber:
                 self.on_language_switch(_VOICE_LANG_ENGLISH[w])
                 return
             # Not a language name → type the single word
-            if self.use_clipboard:
-                self._paste_via_clipboard(text1)
-            else:
-                self._type_via_keyboard(text1)
+            self._emit(text1)
             return
 
         # ── Pass 2: selected language ───────────────────────────────
         # Multi-word: re-transcribe in the user's chosen language.
         # `language` is the config value (e.g. 'fr', 'de', None for auto-detect).
-        result2 = self.model.transcribe(audio_data, language=language)
-
-        segments2 = result2.get("segments", [])
-        if segments2:
-            avg_nsp2 = sum(s.get("no_speech_prob", 0) for s in segments2) / len(segments2)
-            if avg_nsp2 > 0.5:
-                print(f"Skipped pass-2 (no_speech_prob={avg_nsp2:.2f})", flush=True)
-                return
-
-        text2 = result2["text"].strip()
-        if not text2:
+        text2 = self._validate(self.model.transcribe(audio_data, language=language))
+        if text2 is None:
             return
-        if text2.lower().strip('!.,;:?!') in _HALLUCINATIONS:
-            print(f"Skipped hallucination (pass-2): {text2}", flush=True)
-            return
-
-        if self.use_clipboard:
-            self._paste_via_clipboard(text2)
-        else:
-            self._type_via_keyboard(text2)
+        self._emit(text2)
 
 # ── Recorder ───────────────────────────────────────────
 class Recorder:
@@ -209,17 +200,23 @@ class Recorder:
         FRAMES = 1024
         p = pyaudio.PyAudio()
         try:
-            stream = p.open(format=pyaudio.paInt16, channels=1, rate=16000,
-                            frames_per_buffer=FRAMES, input=True,
-                            input_device_index=self.device_index)
-        except Exception as e:
-            print(f"Audio device error: {e}")
-            stream = p.open(format=pyaudio.paInt16, channels=1, rate=16000,
-                            frames_per_buffer=FRAMES, input=True)
-        frames = []
-        while self.recording:
-            frames.append(stream.read(FRAMES, exception_on_overflow=False))
-        stream.stop_stream(); stream.close(); p.terminate()
+            try:
+                stream = p.open(format=pyaudio.paInt16, channels=1, rate=16000,
+                                frames_per_buffer=FRAMES, input=True,
+                                input_device_index=self.device_index)
+            except Exception as e:
+                print(f"Audio device error: {e}")
+                stream = p.open(format=pyaudio.paInt16, channels=1, rate=16000,
+                                frames_per_buffer=FRAMES, input=True)
+            frames = []
+            try:
+                while self.recording:
+                    frames.append(stream.read(FRAMES, exception_on_overflow=False))
+            finally:
+                stream.stop_stream()
+                stream.close()
+        finally:
+            p.terminate()
         audio = np.frombuffer(b''.join(frames), dtype=np.int16).astype(np.float32) / 32768.0
         if len(audio) < 8000:  # <0.5s at 16kHz
             print("Skipped (too short)", flush=True)
@@ -379,8 +376,8 @@ class TrayApp:
                     device_menu.append(item)
                     self.device_radio_items.append(item)
             p.terminate()
-        except:
-            pass
+        except Exception as e:
+            print(f"Audio device enumeration failed: {e}", flush=True)
         device_item = Gtk.MenuItem(label="Audio Device")
         device_item.set_submenu(device_menu)
         settings_menu.append(device_item)
@@ -496,14 +493,15 @@ class TrayApp:
         self._update_icon()
 
     def _set_keybinding(self):
+        current = self.current_key or "not set"
         dialog = Gtk.MessageDialog(
             transient_for=None,
             modal=True,
             message_type=Gtk.MessageType.INFO,
             buttons=Gtk.ButtonsType.NONE,
-            text="Press your desired key combination",
+            text=f"Current shortcut: {current}",
         )
-        dialog.format_secondary_text("Hold two keys, then release. Press Escape to cancel.")
+        dialog.format_secondary_text("Hold new keys, then release to confirm.\nPress Escape to cancel.")
         keys_held = []
         captured = [False]
 
@@ -572,11 +570,10 @@ class TrayApp:
 
     def _edit_config(self):
         try:
-            import subprocess
             cf = os.path.expanduser("~/.config/whisper-dictation/config.json")
             subprocess.Popen(['xdg-open', cf])
-        except:
-            pass
+        except Exception as e:
+            print(f"Failed to open config file: {e}", flush=True)
 
     def start_app(self):
         if self.started: return
