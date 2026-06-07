@@ -3,7 +3,7 @@
 # Installs whisper-dictation with system tray icon on Linux (X11 + Cinnamon/GNOME/KDE)
 set -e
 
-INSTALL_DIR="${WHISPER_DICTATION_DIR:-$HOME/whisper-dictation}"
+INSTALL_DIR="${WHISPER_DICTATION_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
 PYTHON_REQ="3.12"
 
 echo "╔══════════════════════════════════════════╗"
@@ -11,6 +11,7 @@ echo "║   Whisper Dictation - Linux Installer    ║"
 echo "╚══════════════════════════════════════════╝"
 echo ""
 
+echo "  Installation directory: $INSTALL_DIR"
 # ── Check Python ──────────────────────────────────────
 echo "[1/6] Checking Python..."
 if command -v python3.12 &>/dev/null; then
@@ -56,8 +57,15 @@ fi
 
 # ── Install Python dependencies ───────────────────────
 echo "[4/6] Installing Python packages..."
-"$INSTALL_DIR/venv/bin/pip" install --upgrade pip -q
-"$INSTALL_DIR/venv/bin/pip" install -r "$INSTALL_DIR/requirements.txt" -q
+echo "  Note: Installing CPU-only version of Torch to save ~2GB of disk space"
+echo "  (No NVIDIA GPU detected)"
+
+# Upgrade pip and install CPU torch
+"$INSTALL_DIR/venv/bin/pip" install --upgrade pip --no-cache-dir
+"$INSTALL_DIR/venv/bin/pip" install torch --index-url https://download.pytorch.org/whl/cpu --no-cache-dir
+
+# Install the rest
+"$INSTALL_DIR/venv/bin/pip" install -r "$INSTALL_DIR/requirements.txt" --no-cache-dir
 echo "  Done"
 
 # ── Verify installation ───────────────────────────────

@@ -227,7 +227,7 @@ sudo usermod -a -G input $USER
 ## Uninstall
 
 ```bash
-rm -rf ~/whisper-dictation
+rm -rf ~/whisper-type
 rm ~/.config/autostart/whisper-dictation.desktop
 rm -rf ~/.config/whisper-dictation
 rm -rf ~/.local/share/whisper-dictation
